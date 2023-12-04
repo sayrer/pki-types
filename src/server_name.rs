@@ -11,10 +11,6 @@ use std::error::Error as StdError;
 
 /// Encodes ways a client can know the expected name of the server.
 ///
-/// This currently covers knowing the DNS name of the server, but
-/// will be extended in the future to supporting privacy-preserving names
-/// for the server ("ECH").  For this reason this enum is `non_exhaustive`.
-///
 /// # Making one
 ///
 /// If you have a DNS name as a `&str`, this type implements `TryFrom<&str>`,
@@ -40,6 +36,11 @@ pub enum ServerName<'a> {
     /// The server is identified by an IP address. SNI is not
     /// done.
     IpAddress(IpAddr),
+
+    /// The server is identified by a DNS name or IP address, accompanied
+    /// by Encrypted Client Hello (ECH) configuration information.
+    #[cfg(feature = "std")]
+    EchName(EchName<'a>),
 }
 
 impl<'a> ServerName<'a> {
@@ -49,6 +50,7 @@ impl<'a> ServerName<'a> {
         match self {
             Self::DnsName(d) => ServerName::DnsName(d.to_owned()),
             Self::IpAddress(i) => ServerName::IpAddress(*i),
+            Self::EchName(ech) => ServerName::EchName(ech.to_owned()),
         }
     }
 
@@ -61,6 +63,7 @@ impl<'a> ServerName<'a> {
         match self {
             Self::DnsName(d) => d.as_ref().into(),
             Self::IpAddress(i) => std::net::IpAddr::from(*i).to_string().into(),
+            Self::EchName(ech) => ech.server_name.to_str(),
         }
     }
 }
@@ -70,6 +73,7 @@ impl<'a> fmt::Debug for ServerName<'a> {
         match self {
             Self::DnsName(d) => f.debug_tuple("DnsName").field(&d.as_ref()).finish(),
             Self::IpAddress(i) => f.debug_tuple("IpAddress").field(i).finish(),
+            Self::EchName(ech) => f.debug_tuple("EchName").field(ech).finish(),
         }
     }
 }
@@ -288,6 +292,72 @@ fn validate(input: &[u8]) -> Result<(), InvalidDnsNameError> {
     }
 
     Ok(())
+}
+
+#[cfg(feature = "std")]
+#[derive(Clone, Eq, Hash, PartialEq, Debug)]
+pub enum EchPrivateName<'a> {
+    /// The server is identified by a DNS name.  The name
+    /// is sent in the TLS Server Name Indication (SNI)
+    /// extension.
+    DnsName(DnsName<'a>),
+
+    /// The server is identified by an IP address. SNI is not
+    /// done.
+    IpAddress(IpAddr),
+}
+
+#[cfg(feature = "std")]
+impl<'a> EchPrivateName<'a> {
+    /// Return the string representation of this `EchPrivateName`.
+    ///
+    /// In the case of a `ServerName::DnsName` instance, this function returns a borrowed `str`.
+    /// For a `ServerName::IpAddress` instance it returns an allocated `String`.
+    #[cfg(feature = "std")]
+    pub(crate) fn to_str(&self) -> Cow<'_, str> {
+        match self {
+            Self::DnsName(d) => d.as_ref().into(),
+            Self::IpAddress(i) => std::net::IpAddr::from(*i).to_string().into(),
+        }
+    }
+
+    #[cfg(feature = "alloc")]
+    pub(crate) fn to_owned(&self) -> EchPrivateName<'static> {
+        match self {
+            Self::DnsName(d) => EchPrivateName::DnsName(d.to_owned()),
+            Self::IpAddress(i) => EchPrivateName::IpAddress(*i),
+        }
+    }
+}
+
+#[cfg(feature = "std")]
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct EchName<'a> {
+    pub server_name: EchPrivateName<'a>,
+    pub config: Cow<'a, [u8]>,
+}
+
+#[cfg(feature = "std")]
+impl<'a> EchName<'a> {
+    pub fn new(server_name: &ServerName<'a>, config: &'a [u8]) -> Self {
+        let name = match server_name {
+            ServerName::DnsName(d) => EchPrivateName::DnsName(d.to_owned()),
+            ServerName::IpAddress(i) => EchPrivateName::IpAddress(i.to_owned()),
+            ServerName::EchName(ech) => ech.server_name.to_owned(),
+        };
+
+        EchName {
+            server_name: name,
+            config: Cow::Borrowed(config),
+        }
+    }
+
+    pub fn to_owned(&self) -> EchName<'static> {
+        EchName {
+            server_name: self.server_name.to_owned(),
+            config: Cow::Owned(self.config.to_owned().into_owned()),
+        }
+    }
 }
 
 /// `no_std` implementation of `std::net::IpAddr`.

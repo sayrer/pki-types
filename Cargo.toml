@@ -11,7 +11,7 @@ repository = "https://github.com/rustls/pki-types"
 categories = ["network-programming", "data-structures", "cryptography"]
 
 [features]
-default = ["alloc"]
+default = ["std"]
 alloc = []
 std = ["alloc"]
 
